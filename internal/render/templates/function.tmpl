@@ -1,0 +1,170 @@
+{{define "assertion" -}}
+tt.assertion(t, {{if .OnlyReturnsError}}{{template "call" .}}{{else}}err{{end}}
+{{- if or (not .Subtests) .PrintInputs -}}
+    , fmt.Sprintf("{{template "message" .}}", {{template "inputs" .}})
+{{- end -}}
+)
+{{- end}}
+
+{{define "equal"}}assert.Equal{{if or (not .Subtests) .PrintInputs}}f{{end}}{{end}}
+
+
+{{define "msg"}}{{if or (not .Subtests) .PrintInputs}} , "{{template "message" .}}", {{template "inputs" .}}{{end}}{{end}} 
+
+
+{{define "function"}}
+{{- $f := .}}
+
+func {{.TestName}}(t *testing.T) {
+	{{- if .ReturnsError}}
+		testError := errors.New("test_error")
+		equalsTestError := func(tt assert.TestingT, e error, i ...interface{}) bool { return assert.Equal(tt, testError, e) }
+
+	{{end}}
+
+	{{- with .Receiver}}
+	{{- if and .IsStruct .Fields}}
+	type calls struct {
+			{{- range .Fields}}
+			{{- if not .IsBasicType}}
+			{{.Name}}Method int
+			{{- end}}
+			{{- end}}
+	}
+	type returns struct {
+			{{- range .Fields}}
+			{{- if not .IsBasicType}}
+			{{.Name}}Method interface{}
+			{{- else}}
+			{{.Name}}Struct {{.Type}}
+			{{- end}}
+			{{- end}}
+	}
+	{{- end}}
+	{{- end}}
+	{{- if .TestParameters}}
+	type args struct {
+		{{- range .TestParameters}}
+				{{Param .}} {{if .Type | AddPackage }}{{if .Type.IsStar}}*{{end}}{{$.Header.Package}}.{{.Type.Value}}{{else}}{{.Type}}{{end}}
+		{{- end}}
+	}
+	{{- end}}
+	tests := []struct {
+		name string
+		{{- with .Receiver}}
+			{{- if and .IsStruct .Fields}}
+			calls calls
+			returns returns
+			{{- end}}
+		{{- end}}
+		{{- if .TestParameters}}
+			args args
+		{{- end}}
+		{{- range .TestResults}}
+			{{Want .}} {{if .Type | AddPackage }}{{if .Type.IsStar}}*{{end}}{{$.Header.Package}}.{{.Type.Value}}{{else}}{{.Type}}{{end}}
+		{{- end}}
+		{{- if .ReturnsError}}
+			assertion assert.ErrorAssertionFunc
+		{{- end}}
+	}{
+		{
+			name: "SAMPLE_TEST_CASE",
+			{{- with .Receiver}}
+				{{- if and .IsStruct .Fields}}
+				calls: calls{
+				{{- range .Fields}}
+				{{- if not .IsBasicType}}
+					{{.Name}}Method: 0,
+				{{- end}}
+				{{- end}}
+				},
+				returns: returns{
+				{{- range .Fields}}
+				{{- if not .IsBasicType}}
+					{{.Name}}Method: nil,
+				{{- else}}
+					{{.Name}}Struct: {{.Type}}(),
+				{{- end}}
+				{{- end}}
+				},
+				{{- end}}
+			{{- end}}
+			{{- if .TestParameters}}
+			args: args{
+			{{- range .TestParameters}}
+				{{- if not .IsBasicType}}
+				{{Param .}}: {{if .Type.IsStar}}&{{end}}{{if .Type | AddPackage }}{{$.Header.Package}}.{{.Type.Value}}{{else}}{{.Type.Value}}{{end}}{},
+				{{- else}}
+				{{Param .}}: {{.GetBasicValue}},
+				{{- end}}
+			{{- end}}
+			},
+			{{- end}}
+			{{- if .ReturnsError}}
+			assertion: equalsTestError,
+			{{- end}}
+		},
+	}
+	for {{if (or .Subtests (not .IsNaked))}} _, tt := {{end}} range tests {
+		{{- if .Subtests}}
+		{{- if .Parallel}}tt := tt{{end}}
+		t.Run(tt.name, func(t *testing.T) {
+			{{- if .Parallel}}t.Parallel(){{end}}
+		{{- end}}
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			{{with .Receiver}}
+			{{- if .IsStruct}}
+			{{- range .Fields}}
+
+			{{- if not .IsBasicType}}
+			{{.Name}} := {{if .Type | AddPackage }}{{if .Type.IsStar}}*{{end}}mocks.NewMock{{.Type.Value}}{{else}}{{.Type}}{{end}}(ctrl)
+			{{.Name}}.EXPECT().METHOD_TO_CALL.Return(tt.returns.{{.Name}}Method).Times(tt.calls.{{.Name}}Method)
+			{{- else}}
+			{{.Name}} := {{.Type}}(tt.returns.{{.Name}}Struct)
+			{{- end}}
+
+			{{end}}
+			{{- end}}
+
+			{{if $.Constructor}}
+				{{- if .IsStruct}}
+					{{Receiver .}} := {{$.Header.Package}}.{{$.Constructor.Name}}(
+					{{- range .Fields}}
+						{{.Name}},
+					{{- end}}
+					)
+				{{- else}}
+					{{Receiver .}} := {{$.Header.Package}}.{{$.Constructor.Name}}()
+				{{- end}}
+			{{- end}}
+			{{- end}}
+
+			{{range .Parameters}}
+				{{- if .IsWriter}}
+					{{Param .}} := &bytes.Buffer{}
+				{{- end}}
+			{{- end}}
+			{{- if and (not .OnlyReturnsError) (not .OnlyReturnsOneValue) }}
+				{{template "results" $f}} {{template "call" $f}}
+			{{- end}}
+			{{- if .ReturnsError}}
+                {{template "assertion" $f}}
+			{{- end}}
+			{{- range .TestResults}}
+				{{- if .IsWriter}}
+                    {{template "equal" $f}}(t, tt.{{Want .}}, {{Param .}}.String(){{template "msg" $f}})
+				{{- else}}
+                    {{- if $f.OnlyReturnsOneValue}}
+                        {{template "equal" $f}}(t, tt.{{Want .}}, {{template "inline" $f}}{{template "msg" $f}})
+                    {{- else}}
+                        {{template "equal" $f}}(t, tt.{{Want .}}, {{Got .}}{{template "msg" $f}})
+                    {{- end}}
+				{{- end}}
+			{{- end}}
+		{{- if .Subtests }} }) {{- end -}}
+	}
+}
+
+{{end}}
